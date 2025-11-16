@@ -47,6 +47,40 @@ func createParagraphBlock(id string, hasChildren bool) notionapi.Block {
 	}
 }
 
+// Helper function to create a bulleted list item block
+func createBulletedListBlock(id string, text string, hasChildren bool) notionapi.Block {
+	return &notionapi.BulletedListItemBlock{
+		BasicBlock: notionapi.BasicBlock{
+			Object:      "block",
+			ID:          notionapi.BlockID(id),
+			Type:        notionapi.BlockTypeBulletedListItem,
+			HasChildren: hasChildren,
+		},
+		BulletedListItem: notionapi.ListItem{
+			RichText: []notionapi.RichText{
+				{PlainText: text},
+			},
+		},
+	}
+}
+
+// Helper function to create a numbered list item block
+func createNumberedListBlock(id string, text string, hasChildren bool) notionapi.Block {
+	return &notionapi.NumberedListItemBlock{
+		BasicBlock: notionapi.BasicBlock{
+			Object:      "block",
+			ID:          notionapi.BlockID(id),
+			Type:        notionapi.BlockTypeNumberedListItem,
+			HasChildren: hasChildren,
+		},
+		NumberedListItem: notionapi.ListItem{
+			RichText: []notionapi.RichText{
+				{PlainText: text},
+			},
+		},
+	}
+}
+
 func TestFetchBlockChildrenSinglePage(t *testing.T) {
 	ctx := context.Background()
 	blockID := notionapi.BlockID("test-block-id")
@@ -330,5 +364,186 @@ func TestFetchAllBlocks(t *testing.T) {
 
 	if result[0].Indent != 0 {
 		t.Errorf("Expected indent 0, got %d", result[0].Indent)
+	}
+}
+
+func TestFetchAllBlocksRecursiveNestedBulletedList(t *testing.T) {
+	ctx := context.Background()
+	blockID := notionapi.BlockID("test-block-id")
+
+	// Structure:
+	// - Parent item
+	//   - Child item 1
+	//   - Child item 2
+	// - Another parent item
+	mock := &mockBlockFetcher{
+		responses: []*notionapi.GetChildrenResponse{
+			{
+				Results: []notionapi.Block{
+					createBulletedListBlock("parent-1", "Parent item", true),
+					createBulletedListBlock("parent-2", "Another parent item", false),
+				},
+				HasMore: false,
+			},
+			{
+				Results: []notionapi.Block{
+					createBulletedListBlock("child-1", "Child item 1", false),
+					createBulletedListBlock("child-2", "Child item 2", false),
+				},
+				HasMore: false,
+			},
+		},
+	}
+
+	result, err := fetchAllBlocksRecursive(ctx, mock, blockID, 0)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// parent-1 (indent 0), child-1 (indent 1), child-2 (indent 1), parent-2 (indent 0)
+	if len(result) != 4 {
+		t.Errorf("Expected 4 blocks, got %d", len(result))
+	}
+
+	expectedIndents := []int{0, 1, 1, 0}
+	expectedTexts := []string{"Parent item", "Child item 1", "Child item 2", "Another parent item"}
+
+	for i, bwi := range result {
+		if bwi.Indent != expectedIndents[i] {
+			t.Errorf("Block %d: expected indent %d, got %d", i, expectedIndents[i], bwi.Indent)
+		}
+
+		// Type assertion to check the block type
+		if block, ok := bwi.Block.(*notionapi.BulletedListItemBlock); ok {
+			if len(block.BulletedListItem.RichText) > 0 {
+				text := block.BulletedListItem.RichText[0].PlainText
+				if text != expectedTexts[i] {
+					t.Errorf("Block %d: expected text %q, got %q", i, expectedTexts[i], text)
+				}
+			}
+		} else {
+			t.Errorf("Block %d: expected BulletedListItemBlock, got %T", i, bwi.Block)
+		}
+	}
+}
+
+func TestFetchAllBlocksRecursiveNestedNumberedList(t *testing.T) {
+	ctx := context.Background()
+	blockID := notionapi.BlockID("test-block-id")
+
+	// Structure:
+	// 1. First item
+	//    1. Nested item 1
+	//    2. Nested item 2
+	//       1. Deep nested item
+	mock := &mockBlockFetcher{
+		responses: []*notionapi.GetChildrenResponse{
+			{
+				Results: []notionapi.Block{
+					createNumberedListBlock("item-1", "First item", true),
+				},
+				HasMore: false,
+			},
+			{
+				Results: []notionapi.Block{
+					createNumberedListBlock("nested-1", "Nested item 1", false),
+					createNumberedListBlock("nested-2", "Nested item 2", true),
+				},
+				HasMore: false,
+			},
+			{
+				Results: []notionapi.Block{
+					createNumberedListBlock("deep-1", "Deep nested item", false),
+				},
+				HasMore: false,
+			},
+		},
+	}
+
+	result, err := fetchAllBlocksRecursive(ctx, mock, blockID, 0)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// item-1 (0), nested-1 (1), nested-2 (1), deep-1 (2)
+	if len(result) != 4 {
+		t.Errorf("Expected 4 blocks, got %d", len(result))
+	}
+
+	expectedIndents := []int{0, 1, 1, 2}
+	expectedTexts := []string{"First item", "Nested item 1", "Nested item 2", "Deep nested item"}
+
+	for i, bwi := range result {
+		if bwi.Indent != expectedIndents[i] {
+			t.Errorf("Block %d: expected indent %d, got %d", i, expectedIndents[i], bwi.Indent)
+		}
+
+		if block, ok := bwi.Block.(*notionapi.NumberedListItemBlock); ok {
+			if len(block.NumberedListItem.RichText) > 0 {
+				text := block.NumberedListItem.RichText[0].PlainText
+				if text != expectedTexts[i] {
+					t.Errorf("Block %d: expected text %q, got %q", i, expectedTexts[i], text)
+				}
+			}
+		} else {
+			t.Errorf("Block %d: expected NumberedListItemBlock, got %T", i, bwi.Block)
+		}
+	}
+}
+
+func TestFetchAllBlocksRecursiveMixedBlockTypes(t *testing.T) {
+	ctx := context.Background()
+	blockID := notionapi.BlockID("test-block-id")
+
+	// Structure:
+	// - Paragraph
+	// - Bulleted list with children
+	//   - Nested bulleted item
+	// - Numbered list
+	mock := &mockBlockFetcher{
+		responses: []*notionapi.GetChildrenResponse{
+			{
+				Results: []notionapi.Block{
+					createParagraphBlock("para-1", false),
+					createBulletedListBlock("bullet-1", "Bulleted item", true),
+					createNumberedListBlock("num-1", "Numbered item", false),
+				},
+				HasMore: false,
+			},
+			{
+				Results: []notionapi.Block{
+					createBulletedListBlock("bullet-child", "Nested bulleted item", false),
+				},
+				HasMore: false,
+			},
+		},
+	}
+
+	result, err := fetchAllBlocksRecursive(ctx, mock, blockID, 0)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// para-1 (0), bullet-1 (0), bullet-child (1), num-1 (0)
+	if len(result) != 4 {
+		t.Errorf("Expected 4 blocks, got %d", len(result))
+	}
+
+	expectedIndents := []int{0, 0, 1, 0}
+	expectedTypes := []notionapi.BlockType{
+		notionapi.BlockTypeParagraph,
+		notionapi.BlockTypeBulletedListItem,
+		notionapi.BlockTypeBulletedListItem,
+		notionapi.BlockTypeNumberedListItem,
+	}
+
+	for i, bwi := range result {
+		if bwi.Indent != expectedIndents[i] {
+			t.Errorf("Block %d: expected indent %d, got %d", i, expectedIndents[i], bwi.Indent)
+		}
+
+		if bwi.Block.GetType() != expectedTypes[i] {
+			t.Errorf("Block %d: expected type %v, got %v", i, expectedTypes[i], bwi.Block.GetType())
+		}
 	}
 }
