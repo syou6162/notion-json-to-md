@@ -153,6 +153,42 @@ notion-to-md <block-id> > output.md
 - 変換オプション（Markdownスタイルのカスタマイズなど）
 - キャッシュ機構（API呼び出し削減）
 
+## テスト
+
+### テストファイル構成
+
+- **converter_test.go**: 変換ロジックのテスト（21テストケース）
+  - ブロックタイプ別変換（heading, paragraph, list, code, toggle, quote, callout, divider）
+  - アノテーション処理（bold, italic, code, strikethrough, 複数アノテーション）
+  - リンク、ネストリスト、複数ブロック、空段落、複数RichText要素
+- **parser_test.go**: URL/Block ID解析のテスト（6テストケース）
+  - Notion URL解析（https/http）
+  - Block ID直接指定（ハイフン有無）
+  - エラーケース
+- **fetcher_test.go**: API取得ロジックのテスト（13テストケース）
+  - ページネーション処理（単一ページ、複数ページ、空）
+  - 再帰的取得（子なし、子あり、深いネスト、最大深度超過）
+  - ネストされた箇条書き（bulleted_list_item、numbered_list_item）
+  - 混在ブロックタイプ
+  - エラーハンドリング
+
+### テスト駆動開発
+
+- BlockFetcherインターフェースを使った依存性注入により、外部APIに依存しないユニットテストを実現
+- モック実装（mockBlockFetcher）を使用してNotion APIをシミュレート
+
+### テスト実行
+
+```bash
+# 全テスト実行
+go test -v
+
+# 特定のテストのみ実行
+go test -v -run TestConvert
+go test -v -run TestFetch
+go test -v -run TestExtract
+```
+
 ## パフォーマンス特性
 
 実測値（実際のNotionページでの測定）:
